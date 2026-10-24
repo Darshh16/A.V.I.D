@@ -1,0 +1,78 @@
+# =========================
+# Python
+# =========================
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyo
+*.pyd
+
+# Virtual environments
+venv/
+.venv/
+env/
+ENV/
+
+# =========================
+# Environment / Secrets
+# =========================
+.env
+.env.*
+!.env.example
+
+# =========================
+# IDE / Editor
+# =========================
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# =========================
+# OS files
+# =========================
+.DS_Store
+Thumbs.db
+
+# =========================
+# ML / Model files
+# =========================
+*.pth
+*.pt
+*.ckpt
+*.onnx
+*.h5
+*.pkl
+*.joblib
+
+# =========================
+# Generated output
+# =========================
+test_output/
+test_output_run/
+testvideo/
+
+# =========================
+# Generated media
+# =========================
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.webm
+
+# =========================
+# Logs
+# =========================
+*.log
+
+# =========================
+# Jupyter
+# =========================
+.ipynb_checkpoints/
+
+# =========================
+# Temporary files
+# =========================
+*.tmp
+*.temp
