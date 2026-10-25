@@ -9,8 +9,8 @@ Put this file and index.html inside your cloned PIA folder (next to main.py), th
 
 and open http://localhost:8000
 
-It receives an uploaded video, runs PIA (python main.py --video ... --outdir ...),
-and returns the verdict as JSON for the UI.
+It receives an uploaded video or MP3, runs PIA, and returns the verdict as JSON
+for the UI.
 """
 import json
 import shutil
@@ -25,7 +25,9 @@ from flask import Flask, jsonify, request, send_from_directory
 ROOT = Path(__file__).resolve().parent
 MAIN = ROOT / "main.py"
 WEIGHTS = ROOT / "checkpoints" / "best_model.pth"
-ALLOWED = {".mp4", ".mov", ".mkv", ".avi", ".webm"}
+VIDEO_EXTENSIONS = {".mp4", ".mov", ".mkv", ".avi", ".webm"}
+AUDIO_EXTENSIONS = {".mp3"}
+ALLOWED = VIDEO_EXTENSIONS | AUDIO_EXTENSIONS
 MAX_MB = 200
 TIMEOUT_S = 60 * 60          # PIA can be slow on CPU
 CLOSURE_PHONEMES = {"m", "b", "p"}   # same set PIA uses for lip-closure checks
@@ -163,10 +165,10 @@ def analyze():
 
     up = request.files.get("video")
     if up is None or not up.filename:
-        return jsonify(error="No video was uploaded."), 400
+        return jsonify(error="No media file was uploaded."), 400
     suffix = Path(up.filename).suffix.lower()
     if suffix not in ALLOWED:
-        return jsonify(error=f"Unsupported file type '{suffix}'. Use MP4, MOV, MKV, AVI or WEBM."), 400
+        return jsonify(error=f"Unsupported file type '{suffix}'. Use MP4, MOV, MKV, AVI, WEBM or MP3."), 400
 
     if not job_lock.acquire(blocking=False):
         return jsonify(error="Another analysis is still running. Wait for it to finish and try again."), 429
@@ -175,28 +177,42 @@ def analyze():
     try:
         src = work / f"input{suffix}"
         up.save(src)
-        video = to_mp4(src, work / "input.mp4")
         outdir = work / "out"
+        if suffix in AUDIO_EXTENSIONS:
+            command = [sys.executable, str(MAIN), "--audio", str(src), "--outdir", str(outdir)]
+        else:
+            video = to_mp4(src, work / "input.mp4")
+            command = [sys.executable, str(MAIN), "--video", str(video), "--outdir", str(outdir)]
 
         proc = subprocess.run(
-            [sys.executable, str(MAIN), "--video", str(video), "--outdir", str(outdir)],
+            command,
             cwd=ROOT, capture_output=True, text=True, timeout=TIMEOUT_S,
         )
         results_file = outdir / "results.json"
         if proc.returncode != 0 or not results_file.exists():
             tail = "\n".join((proc.stdout + "\n" + proc.stderr).strip().splitlines()[-15:])
             return jsonify(
-                error=("Could not complete analysis on this video. Make sure a face is visible in the video frames "
+                error=("Could not complete analysis on this media. Make sure a face is visible in the video frames "
                        "and required packages are installed."),
                 details=tail,
             ), 500
 
         res = json.loads(results_file.read_text(encoding="utf-8"))
-        aligned = Path(res["aligned_json"])
-
         p_fake = float(res["probs"]["fake"])
         fake = bool(res.get("fake", p_fake > 0.5))
-        evidence, total, closure, flagged = build_evidence(aligned, res)
+        if suffix in AUDIO_EXTENSIONS:
+            audio_analysis = res["audio_analysis"]
+            evidence = [{
+                "time": "00:00",
+                "signal": "Audio Forensics",
+                "observation": f"Acoustic Deepfake Detector: {audio_analysis['p_fake'] * 100:.1f}% fake. "
+                               f"{audio_analysis['observation']}",
+                "level": "Review" if audio_analysis["fake"] else "Info",
+            }]
+            total, closure, flagged = 0, 0, 0
+        else:
+            aligned = Path(res["aligned_json"])
+            evidence, total, closure, flagged = build_evidence(aligned, res)
 
         v_score = round(float(res.get("video_analysis", {}).get("p_fake", p_fake)) * 100)
         has_audio = res.get("has_audio", False)
@@ -216,7 +232,7 @@ def analyze():
             frames_total=total,
             closure_frames=closure,
             mismatch_frames=flagged,
-            duration=total / 25.0,
+            duration=res.get("duration", total / 25.0),
             model=res.get("model", "PIA + Wav2Vec2"),
             video_analysis=res.get("video_analysis"),
             audio_analysis=res.get("audio_analysis"),

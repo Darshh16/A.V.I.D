@@ -17,6 +17,7 @@ import json
 import torch
 import argparse
 import torch.nn.functional as F
+import whisperx
 from datetime import datetime, timezone
 
 from src.model import CNNMultistreamModel
@@ -42,7 +43,9 @@ def load_weights(model: torch.nn.Module, ckpt_path: str, device: str):
 
 def main():
     ap = argparse.ArgumentParser(description="Single-video deepfake test (audio-visual)")
-    ap.add_argument("--video", required=True, help="Path to input video (.mp4/.mov)")
+    source = ap.add_mutually_exclusive_group(required=True)
+    source.add_argument("--video", help="Path to input video (.mp4/.mov)")
+    source.add_argument("--audio", help="Path to input audio (.mp3)")
     ap.add_argument("--outdir", required=True, help="Where to save crops/json/results")
     args = ap.parse_args()
 
@@ -50,6 +53,39 @@ def main():
     os.makedirs(outdir, exist_ok=True)
     device = get_device()
     print(f"[INFO] Using device: {device}", flush=True)
+
+    if args.audio:
+        print("[STEP] Loading audio for deepfake detection...", flush=True)
+        audio = whisperx.load_audio(args.audio)
+        audio_res = detect_audio_deepfake(audio, sampling_rate=16000, device=device)
+        p_fake = float(audio_res["p_fake"])
+        result = {
+            "model": "PIA + Wav2Vec2",
+            "code_reference": "https://github.com/skrantidatta/PIA",
+            "paper_reference": "https://arxiv.org/pdf/2510.14241",
+            "audio": os.path.abspath(args.audio),
+            "duration": len(audio) / 16000.0,
+            "mode": "audio",
+            "has_audio": audio_res.get("has_audio", False),
+            "has_speech": audio_res.get("has_speech", False),
+            "has_phonemes": False,
+            "matched_phoneme_frames": 0,
+            "predicted_label": 1 if audio_res["fake"] else 0,
+            "predicted_label_name": "Fake" if audio_res["fake"] else "Real",
+            "fake": audio_res["fake"],
+            "probs": {"real": round(float(audio_res["p_real"]), 4), "fake": round(p_fake, 4)},
+            "video_analysis": {"p_fake": 0.0, "p_real": 1.0, "fake": False, "mode": "audio_only",
+                               "description": "No visual stream supplied"},
+            "audio_analysis": audio_res,
+            "weights": WEIGHTS_PATH,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+        results_path = os.path.join(outdir, "results.json")
+        with open(results_path, "w", encoding="utf-8") as f:
+            json.dump(result, f, indent=2)
+        print(f"[RESULT] Audio verdict: {result['predicted_label_name']} (P(fake)={p_fake:.4f})", flush=True)
+        print(f"[SAVED] {results_path}", flush=True)
+        return
 
     aligned_json, label_dir, raw_audio, has_audio = process_single_video(
         video_path=args.video,
